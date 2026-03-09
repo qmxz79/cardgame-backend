@@ -31,10 +31,10 @@ $result = $game->startGame();
 test('游戏开始成功', $result);
 test('游戏状态 playing', $game->status === 'playing');
 
-// 检查发牌
+// 检查发牌（南宁规则：每人 52 张，8 张底牌）
 $players = $game->getPlayers();
-test('每人 54 张牌', $players[0]->getHandSize() === 54);
-test('总牌数 216', array_sum(array_map(fn($p) => $p->getHandSize(), $players)) === 216);
+test('每人 52 张牌', $players[0]->getHandSize() === 52);
+test('总牌数 208（4 人×52）', array_sum(array_map(fn($p) => $p->getHandSize(), $players)) === 208);
 
 // 检查队伍
 test('玩家 0 和 2 同队', $players[0]->team === $players[2]->team);
