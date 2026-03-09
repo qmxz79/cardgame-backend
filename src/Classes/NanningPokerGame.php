@@ -333,7 +333,6 @@ class NanningPokerGame
         }
         
         $leadCards = $this->currentTrick[0]['cards'];
-        $leadType = $this->currentTrick[0]['type'];
         $leadSuit = $leadCards[0]['suit'];
         
         $player = $this->players[$seat];
@@ -341,24 +340,86 @@ class NanningPokerGame
         
         // 检查是否有首攻花色
         $hasLeadSuit = false;
+        $sameSuitCards = [];
         foreach ($hand as $card) {
             if ($card['suit'] === $leadSuit) {
                 $hasLeadSuit = true;
-                break;
+                $sameSuitCards[] = $card;
             }
         }
         
-        // 如果有该花色但没跟，违规
-        if ($hasLeadSuit && $cards[0]['suit'] !== $leadSuit) {
+        // 没有首攻花色，可以任意出（垫牌或毙牌）
+        if (!$hasLeadSuit) {
+            return ['valid' => true];
+        }
+        
+        // 有首攻花色，必须跟该花色
+        $playedSuit = $cards[0]['suit'];
+        if ($playedSuit !== $leadSuit) {
+            // 检查出的牌是否为主牌（毙牌）
+            $isTrump = false;
+            foreach ($cards as $card) {
+                if ($this->isTrumpCard($card)) {
+                    $isTrump = true;
+                    break;
+                }
+            }
+            
+            if (!$isTrump) {
+                return [
+                    'valid' => false,
+                    'message' => "必须跟{$leadSuit}花色"
+                ];
+            }
+            // 毙牌允许
+            return ['valid' => true, 'isTrump' => true];
+        }
+        
+        // 跟了首攻花色，检查牌型是否匹配
+        $leadType = HandType::identify($leadCards);
+        $playedType = HandType::identify($cards);
+        
+        // 牌型必须相同（单张跟单张，对子跟对子等）
+        if ($leadType['type'] !== $playedType['type']) {
             return [
                 'valid' => false,
-                'message' => "必须跟{$leadSuit}花色"
+                'message' => "必须跟相同牌型（{$leadType['type']}）"
             ];
         }
         
-        // TODO: 检查牌型是否匹配（对子、拖拉机等）
+        // 数量必须相同
+        if (count($cards) !== count($leadCards)) {
+            return [
+                'valid' => false,
+                'message' => "必须出相同数量的牌"
+            ];
+        }
         
         return ['valid' => true];
+    }
+    
+    /**
+     * 检查单张牌是否为主牌
+     */
+    private function isTrumpCard(array $card): bool
+    {
+        // 大小王
+        if ($card['suit'] === 'joker') {
+            return true;
+        }
+        // 级牌
+        if ($card['rank'] === $this->trumpRank) {
+            return true;
+        }
+        // 所有 2
+        if ($card['rank'] === '2') {
+            return true;
+        }
+        // 主花色
+        if ($card['suit'] === $this->trumpSuit) {
+            return true;
+        }
+        return false;
     }
     
     /**
@@ -366,23 +427,8 @@ class NanningPokerGame
      */
     private function getCardType(array $cards): string
     {
-        $count = count($cards);
-        
-        if ($count === 1) {
-            return self::TYPE_SINGLE;
-        }
-        
-        if ($count === 2) {
-            // 检查是否对子
-            if ($cards[0]['rank'] === $cards[1]['rank']) {
-                return self::TYPE_PAIR;
-            }
-            return self::TYPE_SINGLE;
-        }
-        
-        // TODO: 检查拖拉机、三张、推土机、四张、飞机
-        
-        return self::TYPE_SINGLE;
+        $result = HandType::identify($cards);
+        return $result['type'];
     }
     
     /**
@@ -460,20 +506,82 @@ class NanningPokerGame
     private function determineTrickWinner(): int
     {
         $winner = $this->currentTrick[0]['seat'];
-        $highestCard = $this->currentTrick[0]['cards'][0];
+        $highestCards = $this->currentTrick[0]['cards'];
         $highestType = $this->currentTrick[0]['type'];
+        $leadSuit = $highestCards[0]['suit'];
         
         foreach ($this->currentTrick as $play) {
-            foreach ($play['cards'] as $card) {
-                if ($this->isHigherCard($card, $highestCard, $play['type'], $highestType)) {
-                    $winner = $play['seat'];
-                    $highestCard = $card;
-                    $highestType = $play['type'];
-                }
+            $comparison = $this->comparePlay($play['cards'], $highestCards, $leadSuit);
+            if ($comparison > 0) {
+                $winner = $play['seat'];
+                $highestCards = $play['cards'];
+                $highestType = $play['type'];
             }
         }
         
         return $winner;
+    }
+    
+    /**
+     * 比较两家的出牌
+     * @param array $cards1 当前玩家的牌
+     * @param array $cards2 当前最大的牌
+     * @param string $leadSuit 首攻花色
+     * @return int 1=cards1 大，-1=cards2 大
+     */
+    private function comparePlay(array $cards1, array $cards2, string $leadSuit): int
+    {
+        $type1 = HandType::identify($cards1);
+        $type2 = HandType::identify($cards2);
+        
+        // 检查是否为主牌
+        $isTrump1 = $this->isTrumpPlay($cards1);
+        $isTrump2 = $this->isTrumpPlay($cards2);
+        $isLeadSuit1 = $cards1[0]['suit'] === $leadSuit;
+        $isLeadSuit2 = $cards2[0]['suit'] === $leadSuit;
+        
+        // 毙牌情况：主牌 > 副牌
+        if ($isTrump1 && !$isTrump2) {
+            return 1;  // 毙牌大
+        }
+        if (!$isTrump1 && $isTrump2) {
+            return -1;
+        }
+        
+        // 都是主牌或都是副牌，按牌型比较
+        if ($type1['type'] !== $type2['type']) {
+            // 牌型不同，首家大
+            return -1;
+        }
+        
+        // 牌型相同，比较大小
+        return HandType::compare($cards1, $cards2, $this->trumpSuit, $this->trumpRank);
+    }
+    
+    /**
+     * 检查是否为毙牌（主牌毙副牌）
+     */
+    private function isTrumpPlay(array $cards): bool
+    {
+        foreach ($cards as $card) {
+            // 大小王
+            if ($card['suit'] === 'joker') {
+                return true;
+            }
+            // 级牌
+            if ($card['rank'] === $this->trumpRank) {
+                return true;
+            }
+            // 所有 2
+            if ($card['rank'] === '2') {
+                return true;
+            }
+            // 主花色
+            if ($card['suit'] === $this->trumpSuit) {
+                return true;
+            }
+        }
+        return false;
     }
     
     /**
