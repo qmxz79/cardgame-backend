@@ -75,9 +75,10 @@ try {
     // 测试 11: 顺时针出牌
     test('下一个玩家是 1', $playResult['nextPlayer'] === 1);
     
-    // 测试 12: 分数计算
+    // 测试 12: 分数计算（新规则：5=5 分，10/K=10 分，总分 400 分）
     $score = $game->getScore();
     test('初始分数 0', $score === 0);
+    test('总分 400 分', $game->getTotalScore() === 400);
     
     // 测试 13: 牌型识别
     $testCards = [

@@ -44,17 +44,19 @@ class NanningPokerGame
     private int $landlordTeam = 0;
     private int $round = 1;
     private int $totalRounds = 54;  // 每人 54 张
+    private ?int $winner = null;  // 获胜队伍
     
     // 叫牌相关
     private array $bids = [];
     private bool $biddingComplete = false;
     
-    // 分数牌：5=10 分，10=10 分，K=10 分（4 副牌共 480 分）
-    private const SCORE_CARDS = ['5' => 10, '10' => 10, 'K' => 10];
-    private const TOTAL_SCORE = 480;
+    // 分数牌：5=5 分，10=10 分，K=10 分（4 副牌共 400 分）
+    private const SCORE_CARDS = ['5' => 5, '10' => 10, 'K' => 10];
+    private const TOTAL_SCORE = 400;  // 16 张×5 分 + 16 张×10 分 + 16 张×10 分 = 400 分
     private const SHANGZHUANG_LINE = 160;  // 上庄线
-    private const LEVEL_2_LINE = 80;       // 升 2 级线
-    private const LEVEL_3_LINE = 0;        // 升 3 级线
+    private const LEVEL_1_LINE = 80;       // 升 1 级线
+    private const LEVEL_2_LINE = 0;        // 升 2 级线（小光）
+    private const LEVEL_3_LINE = 0;        // 升 3 级线（光头）
     
     // 牌型常量
     private const TYPE_SINGLE = 'single';
@@ -682,49 +684,113 @@ class NanningPokerGame
     }
     
     /**
-     * 计算升级（根据官方规则）
-     * <80 分：升 3 级
-     * 80-159 分：升 2 级
-     * 160-239 分：升 1 级
-     * ≥160 分：上庄
+     * 计算升级（根据最新官方规则）
+     * 
+     * 庄家升级规则:
+     * - 负分（大光）：每负 80 分，在光头基础上多升 1 级（-80 分=升 4 级）
+     * - 0 分（光头）：庄家升 3 级
+     * - 1-79 分（小光）：庄家升 2 级
+     * - 80-159 分：庄家升 1 级
+     * 
+     * 闲家上庄规则:
+     * - 160-239 分：上庄，从上次庄家级数继续
+     * - 240-319 分：上庄，升 1 级
+     * - 320-399 分：上庄，升 2 级
+     * - 每多 80 分：多升 1 级
      */
     private function calculateLevelUp(): void
     {
         $score = $this->opponentScore;
         $levels = 0;
         $shangzhuang = false;
+        $shangzhuangLevels = 0;
         
-        if ($score < self::LEVEL_3_LINE) {
-            // 负分，每 -80 分多升 1 级
+        // 判断庄家升级还是闲家上庄
+        if ($score < 0) {
+            // 负分（大光）：每负 80 分，在光头基础上多升 1 级
             $levels = 3 + (int)(abs($score) / 80);
-        } elseif ($score < self::LEVEL_2_LINE) {
+        } elseif ($score === 0) {
+            // 光头：升 3 级
             $levels = 3;
-        } elseif ($score < self::SHANGZHUANG_LINE) {
+        } elseif ($score < self::LEVEL_1_LINE) {
+            // 小光（1-79 分）：升 2 级
             $levels = 2;
-        } elseif ($score < 240) {
+        } elseif ($score < self::SHANGZHUANG_LINE) {
+            // 80-159 分：升 1 级
             $levels = 1;
         } else {
-            // ≥160 分，上庄
+            // ≥160 分：闲家上庄
             $shangzhuang = true;
-            $levels = 1 + (int)(($score - self::SHANGZHUANG_LINE) / 80);
-        }
-        
-        // 升级
-        for ($i = 0; $i < $levels; $i++) {
-            $this->players[$this->landlordSeat]->levelUp();
-            $teammate = $this->getTeammateSeat($this->landlordSeat);
-            if (isset($this->players[$teammate])) {
-                $this->players[$teammate]->levelUp();
+            
+            if ($score < 240) {
+                // 160-239 分：上庄，不升级
+                $shangzhuangLevels = 0;
+            } elseif ($score < 320) {
+                // 240-319 分：上庄，升 1 级
+                $shangzhuangLevels = 1;
+            } else {
+                // 320+ 分：上庄，每多 80 分升 1 级
+                $shangzhuangLevels = 2 + (int)(($score - 320) / 80);
             }
         }
         
-        // 上庄
+        // 庄家方升级
+        if (!$shangzhuang) {
+            for ($i = 0; $i < $levels; $i++) {
+                $this->players[$this->landlordSeat]->levelUp();
+                $teammate = $this->getTeammateSeat($this->landlordSeat);
+                if (isset($this->players[$teammate])) {
+                    $this->players[$teammate]->levelUp();
+                }
+            }
+            
+            // 检查是否超过 A（庄家获胜）
+            if ($this->checkWinCondition($this->landlordSeat)) {
+                $this->status = 'finished';
+                $this->winner = $this->landlordTeam;
+                return;
+            }
+        }
+        
+        // 闲家上庄
         if ($shangzhuang) {
             $this->changeLandlord();
+            
+            // 上庄后升级
+            for ($i = 0; $i < $shangzhuangLevels; $i++) {
+                $this->players[$this->landlordSeat]->levelUp();
+                $teammate = $this->getTeammateSeat($this->landlordSeat);
+                if (isset($this->players[$teammate])) {
+                    $this->players[$teammate]->levelUp();
+                }
+            }
+            
+            // 检查是否超过 A（闲家获胜）
+            if ($this->checkWinCondition($this->landlordSeat)) {
+                $this->status = 'finished';
+                $this->winner = $this->landlordTeam;
+                return;
+            }
         }
         
         // 检查是否获胜（打到 A）
         $this->checkWin();
+    }
+    
+    /**
+     * 检查是否获胜（超过 A）
+     */
+    private function checkWinCondition(int $seat): bool
+    {
+        $player = $this->players[$seat];
+        $currentLevel = $player->getCurrentLevel();
+        
+        // A 是 12 级（3=1, 4=2, ..., A=12）
+        if ($currentLevel > 12) {
+            return true;
+        }
+        
+        return false;
     }
     
     /**
@@ -828,5 +894,23 @@ class NanningPokerGame
     public function getScore(): int
     {
         return $this->opponentScore;
+    }
+    
+    public function getTotalScore(): int
+    {
+        return self::TOTAL_SCORE;
+    }
+    
+    public function getLevelUpRules(): array
+    {
+        return [
+            'negative' => '每负 80 分，在光头基础上多升 1 级',
+            'zero' => '0 分（光头）：升 3 级',
+            'small_zero' => '1-79 分（小光）：升 2 级',
+            'normal' => '80-159 分：升 1 级',
+            'shangzhuang' => '≥160 分：闲家上庄',
+            'shangzhuang_1' => '240-319 分：上庄升 1 级',
+            'shangzhuang_2' => '≥320 分：上庄升 2 级，每多 80 分多升 1 级'
+        ];
     }
 }
