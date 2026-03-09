@@ -1,7 +1,17 @@
 <?php
 /**
  * NanningPokerGame - 南宁拖拉机游戏规则（完整版）
- * 4 人游戏，2 队对抗，结合南宁本地玩法
+ * 根据官方规则文档实现
+ * 
+ * 规则要点:
+ * - 4 人游戏，2 队对抗（对家为友）
+ * - 4 副扑克（216 张），每人 54 张，无底牌
+ * - 叫牌定庄，黑桃 2 有叫牌权
+ * - 主牌：大王 > 小王 > 主级牌 > 副级牌 > 主 2 > 副 2 > A > K > ... > 3
+ * - 牌型：单张、对子、拖拉机、三张、推土机、四张、飞机
+ * - 计分：只有闲家赢圈计分，总分 480 分
+ * - 扣牌：最后一圈非单张有倍数
+ * - 升级：<80 升 3 级，80-159 升 2 级，160-239 升 1 级，≥160 上庄
  */
 
 namespace App\Classes;
@@ -19,29 +29,41 @@ class NanningPokerGame
     
     private array $playedRounds = [];
     private array $currentTrick = [];
-    private array $trickScores = [0, 0];  // 两队得分
     
+    // 计分：只有闲家得分
+    private int $opponentScore = 0;
+    
+    // 主牌信息
     private string $trumpSuit = '';
-    private string $trumpRank = '2';
+    private string $trumpRank = '3';  // 从 3 开始打
+    private int $currentLevel = 3;
+    
+    // 游戏流程
     private int $currentPlayer = 0;
-    private int $round = 1;
     private int $landlordSeat = 0;
+    private int $landlordTeam = 0;
+    private int $round = 1;
+    private int $totalRounds = 54;  // 每人 54 张
     
-    // 底牌（8 张）
-    private array $bottomCards = [];
+    // 叫牌相关
+    private array $bids = [];
+    private bool $biddingComplete = false;
     
-    // 分数牌：5=5 分，10=10 分，K=10 分
-    private const SCORE_CARDS = ['5' => 5, '10' => 10, 'K' => 10];
+    // 分数牌：5=10 分，10=10 分，K=10 分（4 副牌共 480 分）
+    private const SCORE_CARDS = ['5' => 10, '10' => 10, 'K' => 10];
+    private const TOTAL_SCORE = 480;
+    private const SHANGZHUANG_LINE = 160;  // 上庄线
+    private const LEVEL_2_LINE = 80;       // 升 2 级线
+    private const LEVEL_3_LINE = 0;        // 升 3 级线
     
-    // 南宁规则
-    private const RULES = [
-        'must_follow_suit' => true,      // 必须跟花色
-        'trump_can_change' => true,      // 可以反主
-        'bottom_cards_count' => 8,       // 底牌 8 张
-        'score_5' => 5,                  // 5 的分值
-        'score_10' => 10,                // 10 的分值
-        'score_k' => 10,                 // K 的分值
-    ];
+    // 牌型常量
+    private const TYPE_SINGLE = 'single';
+    private const TYPE_PAIR = 'pair';
+    private const TYPE_TRACTOR = 'tractor';      // 连对
+    private const TYPE_TRIPLE = 'triple';        // 三张
+    private const TYPE_TRIPLE_TRACTOR = 'triple_tractor';  // 推土机
+    private const TYPE_QUAD = 'quad';            // 四张
+    private const TYPE_PLANE = 'plane';          // 飞机
     
     public function __construct(string $gameId)
     {
@@ -63,7 +85,7 @@ class NanningPokerGame
     }
     
     /**
-     * 开始游戏
+     * 开始游戏（叫牌阶段）
      */
     public function startGame(): bool
     {
@@ -75,32 +97,162 @@ class NanningPokerGame
         $this->deck = PokerCard::createDecks(4);
         PokerCard::shuffleCards($this->deck);
         
-        // 留 8 张底牌
-        $this->bottomCards = array_splice($this->deck, 0, 8);
-        
-        // 发牌（每人 52 张）
+        // 发牌（每人 54 张，无底牌）
         $this->dealCards();
         
-        // 随机确定庄家
-        $this->landlordSeat = array_rand($this->players);
-        $this->currentPlayer = $this->landlordSeat;
-        $this->players[$this->landlordSeat]->isLandlord = true;
-        
-        $this->trumpRank = '2';
-        $this->trumpSuit = '';
-        $this->status = 'playing';
-        $this->round = 1;
-        $this->trickScores = [0, 0];
+        // 进入叫牌阶段
+        $this->status = 'bidding';
+        $this->findHeiTao2Player();
         
         return true;
     }
     
     /**
-     * 发牌（每人 52 张，剩余 8 张为底牌）
+     * 找到黑桃 2 持有者（有叫牌权）
+     */
+    private function findHeiTao2Player(): int
+    {
+        foreach ($this->players as $seat => $player) {
+            $hand = $player->getHand();
+            foreach ($hand as $card) {
+                if ($card['suit'] === 'spade' && $card['rank'] === '2') {
+                    return $seat;
+                }
+            }
+        }
+        // 默认第一个玩家
+        return 0;
+    }
+    
+    /**
+     * 叫牌
+     * @param int $seat 玩家座位
+     * @param string $suit 叫的花色
+     * @param int $count 叫的张数（1-4）
+     */
+    public function bid(int $seat, string $suit, int $count = 1): array
+    {
+        if ($this->status !== 'bidding') {
+            return ['success' => false, 'message' => '不在叫牌阶段'];
+        }
+        
+        // 验证玩家是否有叫牌权
+        if (!$this->canBid($seat)) {
+            return ['success' => false, 'message' => '没有叫牌权'];
+        }
+        
+        // 记录叫牌
+        $this->bids[] = [
+            'seat' => $seat,
+            'suit' => $suit,
+            'count' => $count,
+            'time' => time()
+        ];
+        
+        // 检查是否可以反叫
+        $canOvercall = $this->canOvercall($seat, $count);
+        
+        return [
+            'success' => true,
+            'bid' => $this->bids[count($this->bids) - 1],
+            'canOvercall' => $canOvercall,
+            'nextBidder' => $this->getNextBidder($seat)
+        ];
+    }
+    
+    /**
+     * 检查是否有叫牌权
+     */
+    private function canBid(int $seat): bool
+    {
+        if (empty($this->bids)) {
+            // 第一轮：黑桃 2 持有者有叫牌权
+            return $seat === $this->findHeiTao2Player();
+        }
+        
+        // 后续：按顺序
+        $lastBid = $this->bids[count($this->bids) - 1];
+        return $seat === $this->getNextBidder($lastBid['seat']);
+    }
+    
+    /**
+     * 检查是否可以反叫
+     */
+    private function canOvercall(int $seat, int $count): bool
+    {
+        if (empty($this->bids)) {
+            return true;
+        }
+        
+        $lastBid = $this->bids[count($this->bids) - 1];
+        
+        // 张数必须更多
+        if ($count <= $lastBid['count']) {
+            return false;
+        }
+        
+        // 检查玩家是否有足够的级牌
+        $player = $this->players[$seat];
+        $hand = $player->getHand();
+        $levelCards = 0;
+        foreach ($hand as $card) {
+            if ($card['rank'] === $this->trumpRank) {
+                $levelCards++;
+            }
+        }
+        
+        return $levelCards >= $count;
+    }
+    
+    /**
+     * 获取下一个有叫牌权的玩家
+     */
+    private function getNextBidder(int $currentSeat): int
+    {
+        return ($currentSeat + 1) % 4;
+    }
+    
+    /**
+     * 结束叫牌，确定庄家
+     */
+    public function finishBidding(): array
+    {
+        if (empty($this->bids)) {
+            return ['success' => false, 'message' => '没有叫牌'];
+        }
+        
+        // 找到最大的叫牌（张数最多）
+        $maxBid = $this->bids[0];
+        foreach ($this->bids as $bid) {
+            if ($bid['count'] > $maxBid['count']) {
+                $maxBid = $bid;
+            }
+        }
+        
+        // 确定庄家和主花色
+        $this->landlordSeat = $maxBid['seat'];
+        $this->landlordTeam = $this->players[$maxBid['seat']]->team;
+        $this->trumpSuit = $maxBid['suit'];
+        $this->players[$maxBid['seat']]->isLandlord = true;
+        
+        $this->biddingComplete = true;
+        $this->status = 'playing';
+        $this->currentPlayer = $maxBid['seat'];
+        
+        return [
+            'success' => true,
+            'landlord' => $maxBid['seat'],
+            'trumpSuit' => $this->trumpSuit,
+            'trumpRank' => $this->trumpRank
+        ];
+    }
+    
+    /**
+     * 发牌（每人 54 张，无底牌）
      */
     private function dealCards(): void
     {
-        $cardsPerPlayer = 52;  // (216-8)/4 = 52
+        $cardsPerPlayer = 54;  // 216/4 = 54
         foreach ($this->players as $seat => $player) {
             $playerCards = [];
             for ($i = 0; $i < $cardsPerPlayer; $i++) {
@@ -117,6 +269,10 @@ class NanningPokerGame
      */
     public function playCards(int $seat, array $cardIndices): array
     {
+        if ($this->status !== 'playing') {
+            return ['success' => false, 'message' => '游戏未开始'];
+        }
+        
         if (!isset($this->players[$seat])) {
             return ['success' => false, 'message' => 'Invalid seat'];
         }
@@ -132,28 +288,20 @@ class NanningPokerGame
             return ['success' => false, 'message' => 'No cards to play'];
         }
         
-        // 验证出牌（南宁规则：必须跟花色）
+        // 验证出牌
         $validation = $this->validatePlay($seat, $playedCards);
         if (!$validation['valid']) {
             return ['success' => false, 'message' => $validation['message']];
         }
         
         // 记录出牌
+        $trickScore = $this->calculateTrickScore($playedCards);
         $this->currentTrick[] = [
             'seat' => $seat,
             'cards' => $playedCards,
-            'score' => $this->calculateTrickScore($playedCards)
+            'score' => $trickScore,
+            'type' => $this->getCardType($playedCards)
         ];
-        
-        // 确定主花色（第一张非王牌）
-        if (empty($this->trumpSuit)) {
-            foreach ($playedCards as $card) {
-                if ($card['suit'] !== 'joker') {
-                    $this->trumpSuit = $card['suit'];
-                    break;
-                }
-            }
-        }
         
         // 从手牌移除
         $this->removeCardsFromHand($seat, $cardIndices);
@@ -170,33 +318,13 @@ class NanningPokerGame
         return [
             'success' => true,
             'playedCards' => $playedCards,
-            'trumpSuit' => $this->trumpSuit,
-            'trumpRank' => $this->trumpRank,
             'nextPlayer' => $this->currentPlayer,
             'trickComplete' => count($this->currentTrick) >= 4
         ];
     }
     
     /**
-     * 获取手牌中的牌
-     */
-    private function getCardsFromHand(int $seat, array $indices): array
-    {
-        $player = $this->players[$seat];
-        $hand = $player->getHand();
-        $cards = [];
-        
-        foreach ($indices as $index) {
-            if (isset($hand[$index])) {
-                $cards[] = $hand[$index];
-            }
-        }
-        
-        return $cards;
-    }
-    
-    /**
-     * 验证出牌
+     * 验证出牌（跟牌规则）
      */
     private function validatePlay(int $seat, array $cards): array
     {
@@ -204,8 +332,10 @@ class NanningPokerGame
             return ['valid' => true];  // 首家可以任意出
         }
         
-        // 必须跟首家的花色（南宁规则）
-        $leadSuit = $this->currentTrick[0]['cards'][0]['suit'];
+        $leadCards = $this->currentTrick[0]['cards'];
+        $leadType = $this->currentTrick[0]['type'];
+        $leadSuit = $leadCards[0]['suit'];
+        
         $player = $this->players[$seat];
         $hand = $player->getHand();
         
@@ -226,11 +356,37 @@ class NanningPokerGame
             ];
         }
         
+        // TODO: 检查牌型是否匹配（对子、拖拉机等）
+        
         return ['valid' => true];
     }
     
     /**
-     * 计算本轮分数
+     * 获取牌型
+     */
+    private function getCardType(array $cards): string
+    {
+        $count = count($cards);
+        
+        if ($count === 1) {
+            return self::TYPE_SINGLE;
+        }
+        
+        if ($count === 2) {
+            // 检查是否对子
+            if ($cards[0]['rank'] === $cards[1]['rank']) {
+                return self::TYPE_PAIR;
+            }
+            return self::TYPE_SINGLE;
+        }
+        
+        // TODO: 检查拖拉机、三张、推土机、四张、飞机
+        
+        return self::TYPE_SINGLE;
+    }
+    
+    /**
+     * 计算本轮分数（只有闲家赢才计分）
      */
     private function calculateTrickScore(array $cards): int
     {
@@ -259,27 +415,43 @@ class NanningPokerGame
             $trickScore += $play['score'];
         }
         
-        // 赢家得分
-        $this->trickScores[$winnerTeam] += $trickScore;
-        
-        // 如果是最后一轮，庄家获得底牌分
-        if ($this->isLastRound()) {
-            $bottomScore = $this->calculateBottomScore();
-            if ($winnerSeat === $this->landlordSeat) {
-                // 庄家赢，底牌分归庄家队
-                $this->trickScores[$winnerTeam] += $bottomScore;
-            } else {
-                // 闲家赢，抠底，分数翻倍
-                $this->trickScores[$winnerTeam] += $bottomScore * 2;
+        // 只有闲家赢才计分
+        if ($winnerTeam !== $this->landlordTeam) {
+            // 如果是最后一圈，检查是否有扣牌
+            if ($this->isLastRound()) {
+                $trickScore = $this->calculateDeduction($trickScore);
             }
+            $this->opponentScore += $trickScore;
         }
         
         // 赢家下一轮先出
         $this->currentPlayer = $winnerSeat;
         $this->currentTrick = [];
+        $this->playedRounds[] = $this->currentTrick;
         
         // 检查是否结束
         $this->checkGameEnd();
+    }
+    
+    /**
+     * 计算扣牌（最后一圈倍数）
+     */
+    private function calculateDeduction(int $score): int
+    {
+        if (empty($this->currentTrick)) {
+            return $score;
+        }
+        
+        $firstPlay = $this->currentTrick[0];
+        $cardCount = count($firstPlay['cards']);
+        
+        // 只有非单张才有倍数
+        if ($firstPlay['type'] === self::TYPE_SINGLE) {
+            return $score;
+        }
+        
+        // 扣牌分 = 得分牌总分 × 出牌数量
+        return $score * $cardCount;
     }
     
     /**
@@ -289,12 +461,14 @@ class NanningPokerGame
     {
         $winner = $this->currentTrick[0]['seat'];
         $highestCard = $this->currentTrick[0]['cards'][0];
+        $highestType = $this->currentTrick[0]['type'];
         
         foreach ($this->currentTrick as $play) {
             foreach ($play['cards'] as $card) {
-                if ($this->isHigherCard($card, $highestCard)) {
+                if ($this->isHigherCard($card, $highestCard, $play['type'], $highestType)) {
                     $winner = $play['seat'];
                     $highestCard = $card;
+                    $highestType = $play['type'];
                 }
             }
         }
@@ -303,55 +477,81 @@ class NanningPokerGame
     }
     
     /**
-     * 比较牌大小（考虑主牌）
+     * 比较牌大小（根据官方规则）
+     * 大王 > 小王 > 主级牌 > 副级牌 > 主 2 > 副 2 > A > K > ... > 3
      */
-    private function isHigherCard(array $card1, array $card2): bool
+    private function isHigherCard(array $card1, array $card2, string $type1, string $type2): bool
     {
-        // 都是主牌
-        $isTrump1 = $this->isTrump($card1);
-        $isTrump2 = $this->isTrump($card2);
-        
-        if ($isTrump1 && !$isTrump2) return true;
-        if (!$isTrump1 && $isTrump2) return false;
-        
-        // 同花色或同为主牌，比较牌值
-        if ($card1['suit'] === $card2['suit']) {
-            return $card1['value'] > $card2['value'];
+        // 同牌型比较
+        if ($type1 !== $type2) {
+            // 不同牌型：首家牌型大（除非被毙）
+            return false;
         }
         
-        return false;
+        $value1 = $this->getCardValue($card1);
+        $value2 = $this->getCardValue($card2);
+        
+        return $value1 > $value2;
     }
     
     /**
-     * 是否为主牌
+     * 获取牌值（考虑主牌）
      */
-    private function isTrump(array $card): bool
+    private function getCardValue(array $card): int
     {
-        // 大小王是主
-        if ($card['suit'] === 'joker') return true;
+        // 大王
+        if ($card['suit'] === 'joker' && $card['rank'] === 'red') {
+            return 1000;
+        }
         
-        // 主花色是主
-        if (!empty($this->trumpSuit) && $card['suit'] === $this->trumpSuit) return true;
+        // 小王
+        if ($card['suit'] === 'joker' && $card['rank'] === 'black') {
+            return 900;
+        }
         
-        // 级牌是主
-        if ($card['rank'] === $this->trumpRank) return true;
+        // 主级牌
+        if ($card['rank'] === $this->trumpRank && $card['suit'] === $this->trumpSuit) {
+            return 800;
+        }
         
-        return false;
+        // 副级牌（其他花色的级牌）
+        if ($card['rank'] === $this->trumpRank) {
+            // 按花色：黑>红>梅>方
+            $suitOrder = ['spade' => 4, 'heart' => 3, 'club' => 2, 'diamond' => 1];
+            return 700 + ($suitOrder[$card['suit']] ?? 0);
+        }
+        
+        // 主 2
+        if ($card['rank'] === '2' && $card['suit'] === $this->trumpSuit) {
+            return 600;
+        }
+        
+        // 副 2
+        if ($card['rank'] === '2') {
+            $suitOrder = ['spade' => 4, 'heart' => 3, 'club' => 2, 'diamond' => 1];
+            return 500 + ($suitOrder[$card['suit']] ?? 0);
+        }
+        
+        // 主花色牌
+        if ($card['suit'] === $this->trumpSuit) {
+            return 400 + $this->getRankValue($card['rank']);
+        }
+        
+        // 副牌
+        return $this->getRankValue($card['rank']);
     }
     
     /**
-     * 计算底牌分
+     * 获取牌面值
      */
-    private function calculateBottomScore(): int
+    private function getRankValue(string $rank): int
     {
-        $score = 0;
-        foreach ($this->bottomCards as $card) {
-            $rank = $card['rank'];
-            if (isset(self::SCORE_CARDS[$rank])) {
-                $score += self::SCORE_CARDS[$rank];
-            }
-        }
-        return $score;
+        $values = [
+            'A' => 14, 'K' => 13, 'Q' => 12, 'J' => 11,
+            '10' => 10, '9' => 9, '8' => 8, '7' => 7,
+            '6' => 6, '5' => 5, '4' => 4, '3' => 3
+        ];
+        return $values[$rank] ?? 0;
     }
     
     /**
@@ -359,12 +559,7 @@ class NanningPokerGame
      */
     private function isLastRound(): bool
     {
-        foreach ($this->players as $player) {
-            if ($player->getHandSize() > 0) {
-                return false;
-            }
-        }
-        return true;
+        return $this->round >= $this->totalRounds;
     }
     
     /**
@@ -372,84 +567,90 @@ class NanningPokerGame
      */
     private function checkGameEnd(): void
     {
-        // 所有玩家手牌为 0 时结束
-        $allEmpty = true;
-        foreach ($this->players as $player) {
-            if ($player->getHandSize() > 0) {
-                $allEmpty = false;
-                break;
-            }
-        }
-        
-        if ($allEmpty) {
+        if ($this->round >= $this->totalRounds) {
             $this->calculateLevelUp();
             $this->status = 'finished';
         }
     }
     
     /**
-     * 计算升级（南宁规则）
+     * 计算升级（根据官方规则）
+     * <80 分：升 3 级
+     * 80-159 分：升 2 级
+     * 160-239 分：升 1 级
+     * ≥160 分：上庄
      */
     private function calculateLevelUp(): void
     {
-        // 闲家得分判断升级
-        $opponentTeam = ($this->players[$this->landlordSeat]->team + 1) % 2;
-        $opponentScore = $this->trickScores[$opponentTeam];
-        
-        // 南宁规则简化版：
-        // 闲家 0-35 分：庄家升 3 级
-        // 闲家 40-75 分：庄家升 2 级
-        // 闲家 80-115 分：庄家升 1 级
-        // 闲家 120-155 分：庄家下庄
-        // 闲家 160+ 分：闲家升 1 级并坐庄
-        
+        $score = $this->opponentScore;
         $levels = 0;
-        $newLandlord = $this->landlordSeat;
+        $shangzhuang = false;
         
-        if ($opponentScore < 40) {
+        if ($score < self::LEVEL_3_LINE) {
+            // 负分，每 -80 分多升 1 级
+            $levels = 3 + (int)(abs($score) / 80);
+        } elseif ($score < self::LEVEL_2_LINE) {
             $levels = 3;
-        } elseif ($opponentScore < 80) {
+        } elseif ($score < self::SHANGZHUANG_LINE) {
             $levels = 2;
-        } elseif ($opponentScore < 120) {
+        } elseif ($score < 240) {
             $levels = 1;
-        } elseif ($opponentScore >= 160) {
-            // 闲家上台
-            $levels = 1;
-            $newLandlord = $this->findOpponentPlayer();
         } else {
-            // 闲家 120-155 分，庄家下庄
-            $newLandlord = $this->findOpponentPlayer();
+            // ≥160 分，上庄
+            $shangzhuang = true;
+            $levels = 1 + (int)(($score - self::SHANGZHUANG_LINE) / 80);
         }
         
         // 升级
         for ($i = 0; $i < $levels; $i++) {
             $this->players[$this->landlordSeat]->levelUp();
-            $teammate = $this->players[$this->landlordSeat]->getTeammateSeat();
+            $teammate = $this->getTeammateSeat($this->landlordSeat);
             if (isset($this->players[$teammate])) {
                 $this->players[$teammate]->levelUp();
             }
         }
         
-        // 换庄
-        if ($newLandlord !== $this->landlordSeat) {
-            $this->players[$this->landlordSeat]->isLandlord = false;
-            $this->landlordSeat = $newLandlord;
-            $this->players[$newLandlord]->isLandlord = true;
+        // 上庄
+        if ($shangzhuang) {
+            $this->changeLandlord();
         }
+        
+        // 检查是否获胜（打到 A）
+        $this->checkWin();
     }
     
     /**
-     * 找到对手玩家
+     * 获取队友座位
      */
-    private function findOpponentPlayer(): int
+    private function getTeammateSeat(int $seat): int
     {
-        $landlordTeam = $this->players[$this->landlordSeat]->team;
-        foreach ($this->players as $seat => $player) {
-            if ($player->team !== $landlordTeam) {
-                return $seat;
-            }
-        }
-        return 0;
+        return ($seat + 2) % 4;  // 对家为友
+    }
+    
+    /**
+     * 换庄
+     */
+    private function changeLandlord(): void
+    {
+        $this->players[$this->landlordSeat]->isLandlord = false;
+        
+        // 找到对手方
+        $newLandlord = ($this->landlordSeat + 1) % 4;
+        $this->landlordSeat = $newLandlord;
+        $this->landlordTeam = $this->players[$newLandlord]->team;
+        $this->players[$newLandlord]->isLandlord = true;
+    }
+    
+    /**
+     * 检查是否获胜（打到 A）
+     */
+    private function checkWin(): void
+    {
+        // 检查庄家方是否打到 A
+        $landlordPlayer = $this->players[$this->landlordSeat];
+        $teammate = $this->players[$this->getTeammateSeat($this->landlordSeat)];
+        
+        // TODO: 检查是否打到 A（需要 Player 类记录当前级别）
     }
     
     /**
@@ -457,9 +658,26 @@ class NanningPokerGame
      */
     private function removeCardsFromHand(int $seat, array $indices): void
     {
-        // 简化实现：实际需要根据索引移除对应的牌
         $player = $this->players[$seat];
-        // 这里需要 Player 类支持按索引移除
+        // TODO: 实现手牌移除逻辑
+    }
+    
+    /**
+     * 获取手牌中的牌
+     */
+    private function getCardsFromHand(int $seat, array $indices): array
+    {
+        $player = $this->players[$seat];
+        $hand = $player->getHand();
+        $cards = [];
+        
+        foreach ($indices as $index) {
+            if (isset($hand[$index])) {
+                $cards[] = $hand[$index];
+            }
+        }
+        
+        return $cards;
     }
     
     public function getPlayers(): array
@@ -479,10 +697,13 @@ class NanningPokerGame
             'status' => $this->status,
             'currentPlayer' => $this->currentPlayer,
             'landlordSeat' => $this->landlordSeat,
+            'landlordTeam' => $this->landlordTeam,
             'trumpSuit' => $this->trumpSuit,
             'trumpRank' => $this->trumpRank,
+            'currentLevel' => $this->currentLevel,
             'round' => $this->round,
-            'scores' => $this->trickScores,
+            'opponentScore' => $this->opponentScore,
+            'bids' => $this->bids,
             'players' => array_map(fn($p) => $p->toArray(), $this->players)
         ];
     }
@@ -496,8 +717,8 @@ class NanningPokerGame
         ];
     }
     
-    public function getScores(): array
+    public function getScore(): int
     {
-        return $this->trickScores;
+        return $this->opponentScore;
     }
 }
