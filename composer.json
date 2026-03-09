@@ -1,0 +1,14 @@
+{
+    "name": "leon/cardgame",
+    "description": "Card Game WebSocket Server",
+    "type": "project",
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "require": {
+        "php": ">=8.2",
+        "cboden/ratchet": "^0.4.4"
+    }
+}

@@ -1,0 +1,28 @@
+# Composer
+/vendor/
+/composer.lock
+
+# 配置文件
+/src/Config/database.php
+
+# 日志
+*.log
+logs/
+
+# 测试报告
+/TEST_REPORT.md
+/COMPLETION_REPORT.md
+
+# IDE
+/.idea/
+/.vscode/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+/tmp/
+*.tmp

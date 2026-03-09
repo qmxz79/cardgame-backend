@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Card Game WebSocket Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .log { background: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        input { padding: 8px; margin: 5px; width: 200px; }
+        .controls { margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <h1>🎮 Card Game WebSocket 测试客户端</h1>
+    
+    <div id="status" class="status disconnected">❌ 未连接</div>
+    
+    <div class="controls">
+        <input type="text" id="username" placeholder="用户名" value="Player1">
+        <button onclick="connect()">连接</button>
+        <button onclick="disconnect()" disabled>断开</button>
+    </div>
+    
+    <div class="controls" id="gameControls" style="display:none;">
+        <button onclick="login()">登录</button>
+        <button onclick="createGame()">创建游戏</button>
+        <button onclick="joinGame()">加入游戏</button>
+        <button onclick="startGame()">开始游戏</button>
+        <button onclick="drawCard()">抽牌</button>
+        <button onclick="endTurn()">结束回合</button>
+    </div>
+    
+    <div class="controls">
+        <input type="text" id="gameId" placeholder="游戏 ID">
+    </div>
+    
+    <h3>📋 日志</h3>
+    <div id="log" class="log"></div>
+    
+    <script>
+        let ws = null;
+        const logDiv = document.getElementById('log');
+        const statusDiv = document.getElementById('status');
+        
+        function log(message, data = null) {
+            const time = new Date().toLocaleTimeString();
+            let text = `[${time}] ${message}`;
+            if (data) {
+                text += ' ' + JSON.stringify(data);
+            }
+            logDiv.innerHTML += text + '<br>';
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function connect() {
+            const host = window.location.hostname || 'localhost';
+            ws = new WebSocket(`ws://${host}:8080`);
+            
+            ws.onopen = () => {
+                statusDiv.className = 'status connected';
+                statusDiv.innerHTML = '✅ 已连接';
+                document.querySelector('button[onclick="connect()"]').disabled = true;
+                document.querySelector('button[onclick="disconnect()"]').disabled = false;
+                document.getElementById('gameControls').style.display = 'block';
+                log('✅ 连接到服务器');
+            };
+            
+            ws.onclose = () => {
+                statusDiv.className = 'status disconnected';
+                statusDiv.innerHTML = '❌ 已断开';
+                document.querySelector('button[onclick="connect()"]').disabled = false;
+                document.querySelector('button[onclick="disconnect()"]').disabled = true;
+                document.getElementById('gameControls').style.display = 'none';
+                log('❌ 与服务器断开连接');
+            };
+            
+            ws.onerror = (error) => {
+                log('❌ 错误:', error);
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                log(`📩 ${data.type}:`, data);
+                
+                if (data.type === 'gameCreated' || data.type === 'gameJoined') {
+                    document.getElementById('gameId').value = data.gameId;
+                }
+            };
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+            }
+        }
+        
+        function send(action, data = {}) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                data.action = action;
+                ws.send(JSON.stringify(data));
+                log('📤 发送:', data);
+            } else {
+                log('❌ 未连接');
+            }
+        }
+        
+        function login() {
+            const username = document.getElementById('username').value;
+            send('login', { username, password: 'test' });
+        }
+        
+        function createGame() {
+            send('createGame');
+        }
+        
+        function joinGame() {
+            const gameId = document.getElementById('gameId').value;
+            if (gameId) {
+                send('joinGame', { gameId });
+            } else {
+                log('❌ 请输入游戏 ID');
+            }
+        }
+        
+        function startGame() {
+            const gameId = document.getElementById('gameId').value;
+            if (gameId) {
+                send('startGame', { gameId });
+            }
+        }
+        
+        function drawCard() {
+            const gameId = document.getElementById('gameId').value;
+            if (gameId) {
+                send('drawCard', { gameId });
+            }
+        }
+        
+        function endTurn() {
+            const gameId = document.getElementById('gameId').value;
+            if (gameId) {
+                send('endTurn', { gameId });
+            }
+        }
+    </script>
+</body>
+</html>

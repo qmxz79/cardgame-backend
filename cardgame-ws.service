@@ -1,0 +1,18 @@
+[Unit]
+Description=Card Game WebSocket Server
+After=network.target mysql.service redis-server.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/cardgame
+ExecStart=/usr/bin/php /var/www/cardgame/server.php
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cardgame-ws
+
+[Install]
+WantedBy=multi-user.target
