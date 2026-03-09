@@ -65,7 +65,7 @@ class GameServer implements MessageComponentInterface
     /**
      * 收到消息时
      */
-    public function onMessage(ConnectionInterface $from, $msg): void
+    public function onMessage(ConnectionInterface $conn, $msg): void
     {
         $data = json_decode($msg, true);
         
@@ -278,8 +278,8 @@ class GameServer implements MessageComponentInterface
             return;
         }
         
-        if (count($this->games[$gameId]['players']) >= 2) {
-            $this->send($conn, 'error', ['message' => 'Game is full']);
+        if (count($this->games[$gameId]['players']) >= 4) {
+            $this->send($conn, 'error', ['message' => 'Game is full (max 4 players)']);
             return;
         }
         

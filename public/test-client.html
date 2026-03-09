@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Card Game WebSocket Test</title>
+    <title>Card Game WebSocket Test - 4 Players</title>
     <style>
         body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
         .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
@@ -16,7 +16,7 @@
     </style>
 </head>
 <body>
-    <h1>🎮 Card Game WebSocket 测试客户端</h1>
+    <h1>🎮 Card Game WebSocket 测试客户端 (4 人游戏)</h1>
     
     <div id="status" class="status disconnected">❌ 未连接</div>
     
@@ -27,6 +27,9 @@
     </div>
     
     <div class="controls" id="gameControls" style="display:none;">
+        <div style="background: #e3f2fd; padding: 10px; margin: 10px 0; border-radius: 5px; font-size: 12px;">
+            👥 支持 2-4 人游戏 | 需要至少 2 人开始
+        </div>
         <button onclick="login()">登录</button>
         <button onclick="createGame()">创建游戏</button>
         <button onclick="joinGame()">加入游戏</button>
