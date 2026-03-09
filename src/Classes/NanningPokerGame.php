@@ -87,6 +87,36 @@ class NanningPokerGame
     }
     
     /**
+     * 添加 AI 玩家
+     * @param string $difficulty 难度：easy, medium, hard
+     */
+    public function addAIPlayer(string $difficulty = 'medium'): bool
+    {
+        if (count($this->players) >= 4) {
+            return false;
+        }
+        
+        $seat = count($this->players);
+        $aiPlayer = new AIPlayer($seat, $difficulty);
+        $this->players[$seat] = $aiPlayer;
+        return true;
+    }
+    
+    /**
+     * 获取 AI 玩家列表
+     */
+    public function getAIPlayers(): array
+    {
+        $aiPlayers = [];
+        foreach ($this->players as $player) {
+            if ($player instanceof AIPlayer) {
+                $aiPlayers[] = $player;
+            }
+        }
+        return $aiPlayers;
+    }
+    
+    /**
      * 开始游戏（叫牌阶段）
      */
     public function startGame(): bool

@@ -19,6 +19,7 @@ class Player
     public int $level = 2;      // 当前级别（从 2 开始打到 A）
     public int $score = 0;      // 得分
     public bool $isLandlord = false; // 是否庄家
+    public bool $isAI = false;  // 是否为 AI 玩家
     
     public function __construct(int $playerId, string $username, int $seat)
     {
@@ -140,6 +141,7 @@ class Player
             'levelName' => $this->getLevelName(),
             'score' => $this->score,
             'isLandlord' => $this->isLandlord,
+            'isAI' => $this->isAI,
             'handSize' => count($this->hand),
             'teammateSeat' => $this->getTeammateSeat()
         ];
