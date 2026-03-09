@@ -26,6 +26,8 @@ class PokerCard
     
     public function __construct(string $suit, string $rank, int $deckIndex = 0)
     {
+        static $idCounter = 0;
+        $this->id = ++$idCounter;
         $this->suit = $suit;
         $this->rank = $rank;
         $this->deckIndex = $deckIndex;
