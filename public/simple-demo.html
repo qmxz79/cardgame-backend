@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>南宁拖拉机 - 简单演示</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+        
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 15px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        
+        .log-info { color: #007bff; }
+        .log-success { color: #28a745; }
+        .log-error { color: #dc3545; }
+        
+        .game-info {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        
+        .hand {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 10px;
+        }
+        
+        .card {
+            width: 60px;
+            height: 90px;
+            background: white;
+            border: 2px solid #333;
+            border-radius: 5px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .card.red { color: #dc3545; }
+        .card.black { color: #333; }
+        
+        .card-value { font-size: 1.2em; }
+        .card-suit { font-size: 1.5em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 南宁拖拉机 - 简单演示</h1>
+        
+        <div id="status" class="status disconnected">❌ 未连接</div>
+        
+        <div class="controls">
+            <input type="text" id="username" placeholder="用户名" value="Player1">
+            <button onclick="connect()">连接服务器</button>
+            <button onclick="disconnect()" disabled id="disconnectBtn">断开连接</button>
+            <button onclick="login()" disabled id="loginBtn">登录</button>
+            <button onclick="createGame()" disabled id="createGameBtn">创建游戏</button>
+            <button onclick="joinGame()" disabled id="joinGameBtn">加入游戏</button>
+            <button onclick="startGame()" disabled id="startGameBtn">开始游戏</button>
+            <button onclick="drawCard()" disabled id="drawCardBtn">抽牌</button>
+            <button onclick="endTurn()" disabled id="endTurnBtn">结束回合</button>
+        </div>
+        
+        <div class="game-info">
+            <h3>游戏信息</h3>
+            <div>游戏ID: <span id="gameId">-</span></div>
+            <div>当前回合: <span id="currentTurn">-</span></div>
+            <div>我的手牌: <span id="handCount">0</span> 张</div>
+        </div>
+        
+        <div>
+            <h3>我的手牌</h3>
+            <div class="hand" id="myHand"></div>
+        </div>
+        
+        <h3>日志</h3>
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentUser = null;
+        let currentGameId = null;
+        let myHand = [];
+        
+        // 连接WebSocket服务器
+        function connect() {
+            try {
+                ws = new WebSocket('ws://localhost:8080');
+                
+                ws.onopen = function() {
+                    updateStatus('connected', '✅ 已连接');
+                    addLog('系统', '连接成功', 'info');
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('loginBtn').disabled = false;
+                    document.getElementById('connect').disabled = true;
+                };
+                
+                ws.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    handleMessage(data);
+                };
+                
+                ws.onclose = function() {
+                    updateStatus('disconnected', '❌ 未连接');
+                    addLog('系统', '连接断开', 'error');
+                    resetButtons();
+                };
+                
+                ws.onerror = function(error) {
+                    addLog('错误', error.message, 'error');
+                };
+                
+            } catch (error) {
+                addLog('连接错误', error.message, 'error');
+            }
+        }
+        
+        // 断开连接
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        // 处理服务器消息
+        function handleMessage(data) {
+            console.log('收到消息:', data);
+            
+            switch(data.type) {
+                case 'welcome':
+                    addLog('服务器', data.message, 'info');
+                    break;
+                    
+                case 'loginSuccess':
+                    currentUser = data.user;
+                    addLog('登录成功', currentUser.username, 'success');
+                    document.getElementById('loginBtn').disabled = true;
+                    document.getElementById('createGameBtn').disabled = false;
+                    document.getElementById('joinGameBtn').disabled = false;
+                    break;
+                    
+                case 'gameCreated':
+                    currentGameId = data.gameId;
+                    document.getElementById('gameId').textContent = currentGameId;
+                    addLog('游戏创建', currentGameId, 'success');
+                    document.getElementById('startGameBtn').disabled = false;
+                    break;
+                    
+                case 'gameJoined':
+                    currentGameId = data.gameId;
+                    document.getElementById('gameId').textContent = currentGameId;
+                    addLog('加入游戏', '成功加入', 'success');
+                    break;
+                    
+                case 'gameStarted':
+                    addLog('游戏开始', '游戏正式开始!', 'success');
+                    document.getElementById('startGameBtn').disabled = true;
+                    break;
+                    
+                case 'yourHand':
+                    myHand = data.hand;
+                    renderHand();
+                    document.getElementById('handCount').textContent = myHand.length;
+                    addLog('手牌更新', myHand.length + ' 张卡牌', 'info');
+                    break;
+                    
+                case 'turnChanged':
+                    document.getElementById('currentTurn').textContent = data.playerName;
+                    addLog('回合变更', data.playerName + ' 的回合', 'info');
+                    break;
+                    
+                case 'cardPlayed':
+                    addLog('出牌', data.playerName + ' 打出了 ' + data.card, 'info');
+                    break;
+                    
+                case 'gameOver':
+                    addLog('游戏结束', '获胜者: ' + data.winner, 'success');
+                    break;
+                    
+                case 'error':
+                    addLog('错误', data.message, 'error');
+                    break;
+                    
+                default:
+                    addLog('未知消息', '类型: ' + data.type, 'warning');
+            }
+        }
+        
+        // 渲染手牌
+        function renderHand() {
+            const container = document.getElementById('myHand');
+            container.innerHTML = '';
+            
+            myHand.forEach((card, index) => {
+                const cardEl = document.createElement('div');
+                cardEl.className = 'card';
+                
+                const suit = card.suit || '';
+                const value = card.value || '';
+                
+                if (suit === 'joker') {
+                    cardEl.classList.add('black');
+                    cardEl.innerHTML = `<div class="card-value">${value}</div>`;
+                } else {
+                    const isRed = suit === '♥' || suit === '♦';
+                    cardEl.classList.add(isRed ? 'red' : 'black');
+                    cardEl.innerHTML = `
+                        <div class="card-value">${value}</div>
+                        <div class="card-suit">${suit}</div>
+                    `;
+                }
+                
+                cardEl.onclick = () => playCard(index);
+                container.appendChild(cardEl);
+            });
+        }
+        
+        // 登录
+        function login() {
+            const username = document.getElementById('username').value;
+            if (!username) {
+                addLog('提示', '请输入用户名', 'warning');
+                return;
+            }
+            
+            ws.send(JSON.stringify({
+                action: 'login',
+                username: username
+            }));
+        }
+        
+        // 创建游戏
+        function createGame() {
+            ws.send(JSON.stringify({
+                action: 'createGame'
+            }));
+        }
+        
+        // 加入游戏
+        function joinGame() {
+            const gameId = prompt('请输入游戏ID:');
+            if (gameId) {
+                ws.send(JSON.stringify({
+                    action: 'joinGame',
+                    gameId: gameId
+                }));
+            }
+        }
+        
+        // 开始游戏
+        function startGame() {
+            if (!currentGameId) {
+                addLog('提示', '请先创建或加入游戏', 'warning');
+                return;
+            }
+            
+            ws.send(JSON.stringify({
+                action: 'startGame',
+                gameId: currentGameId
+            }));
+        }
+        
+        // 抽牌
+        function drawCard() {
+            if (!currentGameId) {
+                addLog('提示', '请先加入游戏', 'warning');
+                return;
+            }
+            
+            ws.send(JSON.stringify({
+                action: 'drawCard',
+                gameId: currentGameId
+            }));
+        }
+        
+        // 出牌
+        function playCard(cardIndex) {
+            if (!currentGameId) {
+                addLog('提示', '请先加入游戏', 'warning');
+                return;
+            }
+            
+            ws.send(JSON.stringify({
+                action: 'playCard',
+                gameId: currentGameId,
+                cardIndex: cardIndex
+            }));
+        }
+        
+        // 结束回合
+        function endTurn() {
+            if (!currentGameId) {
+                addLog('提示', '请先加入游戏', 'warning');
+                return;
+            }
+            
+            ws.send(JSON.stringify({
+                action: 'endTurn',
+                gameId: currentGameId
+            }));
+        }
+        
+        // 更新状态
+        function updateStatus(status, message) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status ' + status;
+            statusEl.textContent = message;
+        }
+        
+        // 添加日志
+        function addLog(category, message, type = 'info') {
+            const logEl = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry log-' + type;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${category}: ${message}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        
+        // 重置按钮状态
+        function resetButtons() {
+            document.getElementById('disconnectBtn').disabled = true;
+            document.getElementById('loginBtn').disabled = true;
+            document.getElementById('createGameBtn').disabled = true;
+            document.getElementById('joinGameBtn').disabled = true;
+            document.getElementById('startGameBtn').disabled = true;
+            document.getElementById('drawCardBtn').disabled = true;
+            document.getElementById('endTurnBtn').disabled = true;
+            document.getElementById('connect').disabled = false;
+        }
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            addLog('系统', '页面加载完成', 'info');
+            addLog('提示', '请先连接服务器，然后登录', 'info');
+        });
+    </script>
+</body>
+</html>
